@@ -1,0 +1,31 @@
+{
+  "name": "voice-agent-oss",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "install:all": "npm install --prefix apps/agent && npm install --prefix apps/web",
+    "dev": "bash -lc 'bash ./scripts/run-agent.sh dev & bash ./scripts/run-web.sh dev & wait'",
+    "dev:web": "bash ./scripts/run-web.sh dev",
+    "dev:agent": "bash ./scripts/run-agent.sh dev",
+    "build": "bash -lc 'bash ./scripts/run-agent.sh build && bash ./scripts/run-web.sh build'",
+    "build:web": "bash ./scripts/run-web.sh build",
+    "build:agent": "bash ./scripts/run-agent.sh build",
+    "test": "bash -lc 'bash ./scripts/run-agent.sh test && bash ./scripts/run-web.sh test'",
+    "test:agent": "bash ./scripts/run-agent.sh test",
+    "test:web": "bash ./scripts/run-web.sh test",
+    "lint": "bash ./scripts/run-web.sh lint",
+    "start:web": "bash ./scripts/run-web.sh start",
+    "start:agent": "bash ./scripts/run-agent.sh start"
+  },
+  "description": "Open-source voice agent starter with telephony adapters, Gemini Live, and a dashboard.",
+  "license": "MIT",
+  "keywords": [
+    "voice-agent",
+    "telephony",
+    "gemini-live",
+    "twilio",
+    "plivo",
+    "asterisk",
+    "nextjs"
+  ]
+}

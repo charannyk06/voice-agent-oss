@@ -1,0 +1,14 @@
+[general]
+static = yes
+writeprotect = no
+clearglobalvars = no
+
+[${ASTERISK_INBOUND_CONTEXT}]
+exten => _X.,1,NoOp(Voice agent inbound BYOC call for ${EXTEN})
+ same => n,Stasis(${ASTERISK_ARI_APPLICATION},direction=inbound,caller_number=${CALLERID(num)},dialed_number=${EXTEN})
+ same => n,Hangup()
+
+[${ASTERISK_OUTBOUND_CONTEXT}]
+exten => _X.,1,NoOp(Phase 1 outbound BYOC call for ${EXTEN})
+ same => n,Dial(PJSIP/${EXTEN}@${ASTERISK_PJSIP_ENDPOINT},60)
+ same => n,Hangup()

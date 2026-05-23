@@ -1,0 +1,275 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model Contact {
+  id        String   @id @default(cuid())
+  orgId     String   @default("default")
+  name      String
+  phone     String
+  email     String?
+  category  String   @default("general")
+  starred   Boolean  @default(false)
+  doNotCall Boolean  @default(false)
+  notes     String?
+  memories  Memory[]
+  calls        Call[]
+  appointments Appointment[]
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([id, orgId])
+  @@unique([orgId, phone])
+  @@index([orgId])
+}
+
+model Memory {
+  id        String   @id @default(cuid())
+  contact   Contact  @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  contactId String
+  text      String
+  source    String   @default("manual")
+  createdAt DateTime @default(now())
+}
+
+model Call {
+  id          String       @id @default(cuid())
+  orgId       String       @default("default")
+  contact     Contact?     @relation(fields: [contactId], references: [id], onDelete: SetNull)
+  contactId   String?
+  contactName String
+  phone       String
+  direction   String
+  status      String       @default("completed")
+  duration    Int          @default(0)
+  summary     String?
+  transcript  String?
+  outcome     String?
+  actions     CallAction[]
+  approval    Approval?
+  costs       CostEntry[]
+  appointment Appointment?
+  startedAt   DateTime     @default(now())
+  endedAt     DateTime?
+  createdAt   DateTime     @default(now())
+
+  @@unique([id, orgId])
+  @@index([orgId, status, startedAt])
+}
+
+model CallAction {
+  id          String   @id @default(cuid())
+  call        Call     @relation(fields: [callId], references: [id], onDelete: Cascade)
+  callId      String
+  type        String
+  description String
+  createdAt   DateTime @default(now())
+}
+
+model Approval {
+  id          String   @id @default(cuid())
+  orgId       String   @default("default")
+  call        Call?    @relation(fields: [callId], references: [id], onDelete: SetNull)
+  callId      String?  @unique
+  type        String
+  title       String
+  description String?
+  risk        String   @default("low")
+  status      String   @default("pending")
+  contact     String?
+  phone       String?
+  callContext String?
+  resolvedAt  DateTime?
+  createdAt   DateTime @default(now())
+
+  @@unique([id, orgId])
+  @@index([orgId, status, createdAt])
+}
+
+model CostEntry {
+  id          String   @id @default(cuid())
+  orgId       String   @default("default")
+  call        Call?    @relation(fields: [callId], references: [id], onDelete: SetNull)
+  callId      String?
+  provider    String
+  amountCents Int      @default(0)
+  minutes     Float    @default(0)
+  createdAt   DateTime @default(now())
+
+  @@index([orgId, createdAt])
+}
+
+model AgentConfig {
+  id                            String   @id @default("default")
+  name                          String   @default("Reception Desk")
+  voice                         String   @default("v1")
+  instructions                  String?
+  languageCode                  String   @default("en-US")
+  businessName                  String   @default("Example Business")
+  businessLocation              String   @default("123 Main Street, Example City")
+  receptionNumber               String   @default("+15551234567")
+  urgentTransferNumber       String   @default("+15551234567")
+  businessHoursStart            String   @default("00:00")
+  businessHoursEnd              String   @default("23:59")
+  maxCallDurationMin            Int      @default(15)
+  budgetMonthlyCents            Int      @default(700)
+  budgetDailyAlertCents         Int      @default(300)
+  autoApproveBookingsUnderCents Int      @default(5000)
+  createdAt                     DateTime @default(now())
+  updatedAt                     DateTime @updatedAt
+}
+
+model AgentToolConfig {
+  id          String   @id @default(cuid())
+  orgId       String   @default("default")
+  key         String
+  name        String
+  description String
+  enabled     Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([id, orgId])
+  @@unique([orgId, key])
+  @@index([orgId])
+}
+
+model AutoApproveRule {
+  id        String   @id @default(cuid())
+  orgId     String   @default("default")
+  name      String
+  condition String
+  enabled   Boolean  @default(true)
+  createdAt DateTime @default(now())
+
+  @@unique([id, orgId])
+  @@index([orgId])
+}
+
+model KnowledgeDoc {
+  id        String   @id @default(cuid())
+  orgId     String   @default("default")
+  name      String
+  content   String?
+  size      Int      @default(0)
+  mimeType  String   @default("text/plain")
+  createdAt DateTime @default(now())
+
+  @@unique([id, orgId])
+  @@index([orgId])
+}
+
+model Appointment {
+  id          String    @id @default(cuid())
+  orgId       String    @default("default")
+  contact     Contact?  @relation(fields: [contactId], references: [id], onDelete: SetNull)
+  contactId   String?
+  customerName String
+  phone       String
+  service  String
+  staffMember      String?
+  date        String
+  time        String
+  reason      String
+  status      String    @default("confirmed")
+  source      String    @default("voice-agent")
+  notes       String?
+  call        Call?     @relation(fields: [callId], references: [id], onDelete: SetNull)
+  callId      String?   @unique
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@unique([id, orgId])
+  @@index([orgId, date])
+}
+
+model BlockedNumber {
+  id        String   @id @default(cuid())
+  orgId     String   @default("default")
+  phone     String
+  reason    String?
+  createdAt DateTime @default(now())
+
+  @@unique([orgId, phone])
+  @@index([orgId])
+}
+
+model Notification {
+  id        String   @id @default(cuid())
+  orgId     String   @default("default")
+  type      String
+  title     String
+  body      String
+  read      Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  @@index([orgId, read, createdAt])
+}
+
+model Organization {
+  id                 String                @id @default(cuid())
+  name               String
+  clerkOrgId          String?               @unique
+  stripeCustomerId    String?               @unique
+  subscriptionStatus  String                @default("inactive")
+  currentPeriodEnd    DateTime?
+  minuteQuotaMonthly  Int                   @default(0)
+  memberships         UserMembership[]
+  subscriptions       BillingSubscription[]
+  usageEvents         UsageEvent[]
+  createdAt           DateTime              @default(now())
+  updatedAt           DateTime              @updatedAt
+}
+
+model UserMembership {
+  id          String       @id @default(cuid())
+  org         Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  orgId       String
+  clerkUserId String
+  role        String       @default("member")
+  createdAt   DateTime     @default(now())
+
+  @@unique([clerkUserId, orgId])
+}
+
+model BillingSubscription {
+  id                   String       @id @default(cuid())
+  org                  Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  orgId                String
+  stripeSubscriptionId String       @unique
+  status               String
+  priceId              String?
+  currentPeriodStart   DateTime?
+  currentPeriodEnd     DateTime?
+  cancelAtPeriodEnd    Boolean      @default(false)
+  createdAt            DateTime     @default(now())
+  updatedAt            DateTime     @updatedAt
+}
+
+model UsageEvent {
+  id               String        @id @default(cuid())
+  org              Organization  @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  orgId            String
+  callId           String?
+  kind             String
+  quantity         Int
+  unit             String
+  provider         String?
+  stripeEventId    String?
+  stripeReportedAt DateTime?
+  createdAt        DateTime      @default(now())
+
+  @@unique([orgId, callId, kind])
+  @@index([orgId, kind, createdAt])
+}
+
+model StripeWebhookEvent {
+  id        String   @id
+  type      String
+  processed Boolean  @default(false)
+  createdAt DateTime @default(now())
+}

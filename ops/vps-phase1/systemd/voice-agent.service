@@ -1,0 +1,16 @@
+[Unit]
+Description=Voice Agent runtime
+After=network-online.target docker.service
+Wants=network-online.target
+Requires=docker.service
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/voice-agent
+EnvironmentFile=/opt/voice-agent/apps/agent/.env
+ExecStart=/usr/bin/env bash /opt/voice-agent/scripts/run-agent.sh start
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,159 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  repo-hygiene:
+    name: Repo Hygiene and OSS Export
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 2
+
+      - name: Whitespace check
+        run: |
+          if git rev-parse HEAD^ >/dev/null 2>&1; then
+            git diff --check HEAD^ HEAD
+          else
+            git diff --check
+          fi
+
+      - name: Public export safety check
+        run: ./scripts/create-public-export.sh /tmp/voice-agent-public-ci
+
+      - name: Stale product branding check
+        run: |
+          python3 - <<'PY'
+          import re
+          import subprocess
+          import sys
+          from pathlib import Path
+
+          pattern = re.compile(r"(?:con" r"ductor[-_\s]?oss|con" r"ductross|con" r"ductor|gen" r"eric[-_\s]?voice[-_\s]?agent|@gen" r"eric[-_]voice[-_]agent)", re.I)
+          files = subprocess.check_output(["git", "ls-files"], text=True).splitlines()
+          findings = []
+          for rel in files:
+              if rel.endswith("package-lock.json"):
+                  continue
+              path = Path(rel)
+              try:
+                  data = path.read_text(encoding="utf-8", errors="ignore")
+              except Exception:
+                  continue
+              if "\0" in data:
+                  continue
+              for line_no, line in enumerate(data.splitlines(), 1):
+                  if pattern.search(line):
+                      findings.append(f"{rel}:{line_no}")
+          if findings:
+              print("Found stale old-product branding in Voice Agent OSS source.", file=sys.stderr)
+              print("\n".join(findings[:50]), file=sys.stderr)
+              sys.exit(1)
+          PY
+
+  dependency-audit:
+    name: Dependency Audit
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+
+      - name: Agent production dependency audit
+        run: npm audit --prefix apps/agent --omit=dev --audit-level=moderate
+
+      - name: Web dependency audit
+        run: npm audit --prefix apps/web --audit-level=high
+
+  typecheck:
+    name: TypeScript Check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+
+      - name: Install dependencies
+        run: |
+          cd apps/agent && npm ci
+          cd ../web && npm ci
+
+      - name: Generate Prisma clients
+        run: |
+          cd apps/agent && npx prisma generate
+          cd ../web && npx prisma generate
+
+      - name: TypeScript check, agent
+        run: cd apps/agent && ./node_modules/.bin/tsc --noEmit
+
+      - name: TypeScript check, web
+        run: cd apps/web && ./node_modules/.bin/tsc --noEmit
+
+      - name: Agent build
+        run: npm run build:agent
+
+  agent-tests:
+    name: Agent Tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+
+      - name: Install dependencies
+        run: cd apps/agent && npm ci
+
+      - name: Generate Prisma client
+        run: cd apps/agent && npx prisma generate
+
+      - name: Run tests
+        run: cd apps/agent && npm test
+
+  web-quality:
+    name: Web Static Checks
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+
+      - name: Install dependencies
+        run: cd apps/web && npm ci
+
+      - name: Generate Prisma client
+        run: cd apps/web && npx prisma generate
+
+      - name: Static check
+        run: cd apps/web && npm run lint
+
+      - name: Frontend smoke tests
+        run: cd apps/web && npm test
+
+      - name: Build
+        run: cd apps/web && npm run build

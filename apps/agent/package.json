@@ -1,0 +1,68 @@
+{
+  "name": "@voice-agent-oss/agent",
+  "version": "1.0.0",
+  "description": "Voice Agent OSS runtime with Gemini Live and telephony adapters.",
+  "main": "dist/index.js",
+  "scripts": {
+    "test": "bash ../../scripts/run-agent.sh test",
+    "test:watch": "bash ../../scripts/run-agent.sh test:watch",
+    "test:coverage": "bash ../../scripts/run-node.sh ./node_modules/vitest/vitest.mjs run --coverage",
+    "dev": "bash ../../scripts/run-agent.sh dev",
+    "build": "bash ../../scripts/run-agent.sh build",
+    "start": "bash ../../scripts/run-agent.sh start",
+    "test:agent": "bash ../../scripts/run-agent.sh test:agent",
+    "postinstall": "bash ../../scripts/run-node.sh ./node_modules/prisma/build/index.js generate"
+  },
+  "keywords": [
+    "voice-agent",
+    "gemini-live",
+    "telephony",
+    "twilio",
+    "plivo",
+    "asterisk"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "@google/genai": "^1.48.0",
+    "@prisma/adapter-better-sqlite3": "^7.6.0",
+    "@prisma/client": "^7.6.0",
+    "@types/node": "^25.5.0",
+    "dotenv": "^17.2.3",
+    "tsx": "^4.21.0",
+    "twilio": "^5.13.1",
+    "typescript": "^6.0.2",
+    "ws": "^8.20.0"
+  },
+  "devDependencies": {
+    "@types/ws": "^8.18.1",
+    "@vitest/ui": "^4.1.2",
+    "prisma": "^7.6.0",
+    "vitest": "^4.1.2"
+  },
+  "vitest": {
+    "include": [
+      "src/**/*.test.ts"
+    ],
+    "coverage": {
+      "provider": "v8",
+      "reporter": [
+        "text",
+        "lcov"
+      ],
+      "include": [
+        "src/services/",
+        "src/agents/"
+      ],
+      "exclude": [
+        "src/index.ts",
+        "src/test-agent.ts"
+      ]
+    }
+  },
+  "overrides": {
+    "@hono/node-server": "^1.19.13",
+    "protobufjs": "^7.6.0",
+    "qs": "^6.15.2"
+  }
+}

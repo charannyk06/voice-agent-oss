@@ -1,0 +1,67 @@
+# Dependencies
+apps/*/node_modules/
+apps/*/.node_modules/
+
+# Build outputs
+apps/*/.next/
+apps/*/.next-dev/
+apps/*/dist/
+apps/*/build/
+*.tsbuildinfo
+
+# Environment
+.env
+.env.*
+!.env.example
+apps/*/.env
+apps/*/.env.*
+!apps/*/.env.example
+ops/*/.env
+ops/*/.env.*
+!ops/*/.env.example
+!ops/*/agent.env.example
+
+# Database and generated local state
+*.db
+*.db-journal
+*.sqlite
+*.sqlite3
+apps/*/prisma/dev.db
+
+# Sensitive runtime artifacts
+recordings/
+transcripts/
+uploads/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/*
+!.vscode/settings.json
+!.vscode/extensions.json
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+
+# Cache
+.cache/
+.turbo/
+.vercel
+
+# Local agent/operator workspace files
+.hermes/
+.claude/
+
+# Coverage and key material
+coverage/
+apps/*/coverage/
+*.pem
+*.key
+*.crt
+*.cert
+*.p12
+*.pfx

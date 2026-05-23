@@ -1,0 +1,27 @@
+[global]
+type = global
+user_agent = voice-agent-phase1
+
+[transport-udp]
+type = transport
+protocol = udp
+; The sample binds SIP on the host network for BYOC trunks. Restrict UDP 5060
+; to your SIP provider or VPN at the VPS firewall before using this publicly.
+bind = 0.0.0.0:5060
+
+[${ASTERISK_PJSIP_ENDPOINT}]
+type = endpoint
+transport = transport-udp
+context = ${ASTERISK_INBOUND_CONTEXT}
+disallow = all
+allow = ulaw,alaw
+aors = ${ASTERISK_PJSIP_ENDPOINT}
+direct_media = no
+rtp_symmetric = yes
+rewrite_contact = yes
+force_rport = yes
+
+[${ASTERISK_PJSIP_ENDPOINT}]
+type = aor
+max_contacts = 10
+remove_existing = yes
