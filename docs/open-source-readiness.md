@@ -34,6 +34,8 @@ The remaining live blockers are operational, not source-code blockers:
 - Updated dependency overrides and lockfile so npm audit reports no vulnerabilities.
 - Replaced credential-shaped example placeholders with non-secret placeholders.
 - Added `scripts/create-public-export.sh` to create a tracked-file-only public export after the sanitized tree is committed.
+- Added a Prisma RLS migration for Supabase public tables and expanded public export scanning for Supabase, Slack, JWT, private-key, and Twilio token patterns.
+- Documented that Supabase deployments must run `prisma migrate deploy` before exposing a project URL, and must re-audit RLS if the Prisma connection role changes.
 
 ## Verification run
 
