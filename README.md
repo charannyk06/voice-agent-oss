@@ -69,6 +69,16 @@ NEXT_PUBLIC_CLERK_SIGN_UP_URL=/sign-up
 
 The dashboard uses Postgres through Prisma. SQLite is intentionally not supported for hosted billing because Vercel serverless functions do not provide persistent local disk.
 
+### Apply database migrations (required, especially on Supabase)
+
+```bash
+cd apps/web && npx prisma migrate deploy
+```
+
+The migration set under `apps/web/prisma/migrations/` includes `20260527014444_enable_rls_with_org_policies/migration.sql`, which enables Row-Level Security on every public-schema table and adds tenant-scoped policies for the Supabase `authenticated` role. **Skip this and your Supabase project will fail the `rls_disabled_in_public` linter and expose every table to anyone with your anon key.** The migration is idempotent and safe to re-run.
+
+The migration assumes the app connects via the `postgres` role (which has `rolbypassrls=true`), the default Prisma + Supabase setup. If you change the connection role, re-audit the policies in that file. Read the file's top-of-file comment block before deploying — it explains the Clerk-to-Supabase JWT bridging assumption.
+
 Do not commit `.env` files. Only commit `.env.example` files with placeholders.
 
 ## Payments and hosted usage
