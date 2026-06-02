@@ -8,6 +8,7 @@ export interface CallSession {
   status: 'active' | 'completed' | 'missed' | 'blocked' | 'transferred';
   startedAt: Date;
   endedAt?: Date;
+  billingAuthorizedAt?: Date;
   duration: number;
   transcript: TranscriptLine[];
   actions: CallActionRecord[];

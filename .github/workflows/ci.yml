@@ -10,6 +10,9 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+
 jobs:
   repo-hygiene:
     name: Repo Hygiene and OSS Export
@@ -76,8 +79,8 @@ jobs:
       - name: Agent production dependency audit
         run: npm audit --prefix apps/agent --omit=dev --audit-level=moderate
 
-      - name: Web dependency audit
-        run: npm audit --prefix apps/web --audit-level=high
+      - name: Web production dependency audit
+        run: npm audit --prefix apps/web --omit=dev --audit-level=moderate
 
   typecheck:
     name: TypeScript Check

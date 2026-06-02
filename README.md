@@ -23,7 +23,7 @@ For managed deployments, put the live dashboard URL in the GitHub repository hom
 
 Self-hosters can run the code with their own model, telephony, database, and Stripe accounts. Paid usage applies to the managed hosted service, where the hosted infrastructure pays for model calls, telephony, uptime, and dashboard operations.
 
-Set `DEPLOYMENT_MODE=self_hosted` for local or customer-owned deployments. Set `DEPLOYMENT_MODE=hosted` only when Clerk, Stripe, dashboard tokens, media stream tokens, provider webhook signatures, and usage ingest secrets are configured.
+Set `DEPLOYMENT_MODE=self_hosted` for local or customer-owned deployments. Production agent runtimes with live Gemini or telephony credentials are treated as hosted unless `ALLOW_PRODUCTION_SELF_HOSTED=true` is set explicitly. Set `DEPLOYMENT_MODE=hosted` only when Clerk, Stripe, dashboard tokens, media stream tokens, provider webhook signatures, and usage ingest secrets are configured.
 
 ## Repository layout
 
@@ -69,15 +69,15 @@ NEXT_PUBLIC_CLERK_SIGN_UP_URL=/sign-up
 
 The dashboard uses Postgres through Prisma. SQLite is intentionally not supported for hosted billing because Vercel serverless functions do not provide persistent local disk.
 
-### Apply database migrations (required, especially on Supabase)
+### Apply database migrations
 
 ```bash
 cd apps/web && npx prisma migrate deploy
 ```
 
-The migration set under `apps/web/prisma/migrations/` includes `20260527014444_enable_rls_with_org_policies/migration.sql`, which enables Row-Level Security on every public-schema table and adds tenant-scoped policies for the Supabase `authenticated` role. **Skip this and your Supabase project will fail the `rls_disabled_in_public` linter and expose every table to anyone with your anon key.** The migration is idempotent and safe to re-run.
+The migration set under `apps/web/prisma/migrations/` includes `20260527014444_enable_rls_with_org_policies/migration.sql`, which enables Row-Level Security on public-schema tables, grants browser-facing Supabase roles only the minimum scoped access, and keeps billing-trusted tables read-only for authenticated clients. Skip this and a Supabase deployment can fail the `rls_disabled_in_public` linter or expose tables through PostgREST.
 
-The migration assumes the app connects via the `postgres` role (which has `rolbypassrls=true`), the default Prisma + Supabase setup. If you change the connection role, re-audit the policies in that file. Read the file's top-of-file comment block before deploying — it explains the Clerk-to-Supabase JWT bridging assumption.
+The migration assumes the app connects through the server-side Prisma role. If you change the connection role or wire Clerk-to-Supabase JWT bridging, re-audit the policies in that file before production traffic.
 
 Do not commit `.env` files. Only commit `.env.example` files with placeholders.
 
@@ -100,6 +100,7 @@ STRIPE_SECRET_KEY=
 STRIPE_WEBHOOK_SECRET=
 STRIPE_PRICE_ID=price_value
 HOSTED_MONTHLY_INCLUDED_MINUTES=60
+HOSTED_ALLOW_TRIALING_USAGE=false
 BILLING_USAGE_INGEST_SECRET=
 ```
 
@@ -120,7 +121,7 @@ BILLING_USAGE_INGEST_SECRET=
 INBOUND_ORG_ROUTES=twilio:+15555550100=org_abc
 ```
 
-Hosted usage ingest uses `X-Usage-Timestamp` and `X-Usage-Signature`; the signature is an HMAC-SHA256 over the raw JSON body plus `orgId`, `callId`, and `durationSeconds`. The old shared bearer fallback is only accepted outside `DEPLOYMENT_MODE=hosted`.
+Hosted usage ingest uses `X-Usage-Timestamp` and `X-Usage-Signature`; the signature is an HMAC-SHA256 over the raw JSON body plus `orgId`, `callId`, and `durationSeconds`. The old shared bearer fallback is disabled because any configured usage-ingest secret or URL forces hosted paywall checks.
 
 ## Telephony modes
 

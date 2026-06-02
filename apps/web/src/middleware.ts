@@ -24,7 +24,15 @@ const securedMiddleware = clerkMiddleware(
         return NextResponse.json({ error: "Invalid request origin" }, { status: 403 });
       }
 
-      await auth.protect();
+      const authObject = await auth();
+      if (!authObject.userId) {
+        if (request.nextUrl.pathname.startsWith("/api/")) {
+          return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+        }
+        return NextResponse.redirect(new URL("/sign-in", request.url));
+      }
+
+      return NextResponse.next();
     }
   },
   {

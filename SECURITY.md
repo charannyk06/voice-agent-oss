@@ -26,6 +26,7 @@ For `DEPLOYMENT_MODE=hosted`, keep these controls enabled:
 - `INBOUND_ORG_ROUTES` configured for every hosted inbound telephony entry point
 - Stripe webhook signature verification enabled with `STRIPE_WEBHOOK_SECRET`
 - Usage ingest protected with `BILLING_USAGE_INGEST_SECRET`, `X-Usage-Timestamp`, and `X-Usage-Signature`
+- Trial subscriptions blocked from hosted spend by default. Set `HOSTED_ALLOW_TRIALING_USAGE=true` only if free trial minutes are intentional.
 - `/health/details` reachable only with a dashboard token that includes `calls:read`
 
 The agent fails startup in hosted mode if dashboard tokens, media stream tokens, webhook signatures, usage ingest, or inbound route mapping are unsafe.

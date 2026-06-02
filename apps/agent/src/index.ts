@@ -6,7 +6,6 @@ import { ReceptionistAgent } from './agents/receptionist';
 import { OutboundAgent } from './agents/outbound';
 import { GeminiLiveBridge } from './services/gemini-live';
 import { AsteriskAriRuntime } from './services/asterisk/ari-runtime';
-import { AsteriskExternalMediaTransport } from './services/asterisk/rtp';
 import { ToolService } from './services/tools';
 import { prisma } from './services/prisma';
 import { createMediaStreamToken, verifyMediaStreamToken } from './services/media-stream-token';
@@ -35,6 +34,7 @@ const liveBridges = new Map<string, GeminiLiveBridge>();
 const liveBridgeIntroductions = new Set<string>();
 const streamSidToCallId = new Map<string, string>();
 const socketToStreamSids = new Map<WebSocket, Set<string>>();
+const pendingHostedCallStarts = new Map<string, number>();
 const telephony = new TelephonyService();
 const MAX_BODY_SIZE = 1 * 1024 * 1024;
 const LEGACY_TWILIO_WEBHOOK_PATH = '/voice/twilio-webhook';
@@ -153,11 +153,19 @@ function localDashboardPayload(): DashboardTokenPayload {
   };
 }
 
+function getDashboardRequestOrigin(req: IncomingMessage): string | undefined {
+  const origin = req.headers.origin;
+  if (typeof origin === 'string') return origin;
+  const forwardedOrigin = req.headers['x-dashboard-origin'];
+  if (typeof forwardedOrigin === 'string') return forwardedOrigin;
+  return undefined;
+}
+
 function authenticateDashboardRequest(
   req: IncomingMessage,
   requiredAction: DashboardTokenAction,
 ): DashboardAuthResult {
-  if (!verifyRequestOrigin(req.headers.origin, config.security.dashboardAllowedOrigins)) {
+  if (!verifyRequestOrigin(getDashboardRequestOrigin(req), config.security.dashboardAllowedOrigins)) {
     return { ok: false, statusCode: 403, message: 'Dashboard origin is not allowed' };
   }
 
@@ -231,8 +239,52 @@ function rejectUpgrade(
   socket.destroy();
 }
 
+function getHostedCallReservationUnitSeconds(): number {
+  return Math.max(1, config.agent.maxCallDurationMin * 60);
+}
+
+function getSessionOrgId(session: CallSession): string {
+  return session.orgId || config.deployment.defaultOrgId;
+}
+
+function getHostedReservedSecondsForOrg(orgId: string): number {
+  if (config.deployment.mode === 'self_hosted') {
+    return 0;
+  }
+
+  const reservationUnit = getHostedCallReservationUnitSeconds();
+  let reserved = (pendingHostedCallStarts.get(orgId) ?? 0) * reservationUnit;
+  for (const session of activeCalls.values()) {
+    if ((session.status === 'active' || session.status === 'transferred') && getSessionOrgId(session) === orgId) {
+      reserved += reservationUnit;
+    }
+  }
+  return reserved;
+}
+
+function reserveHostedCallStart(orgId: string): () => void {
+  if (config.deployment.mode === 'self_hosted') {
+    return () => undefined;
+  }
+
+  pendingHostedCallStarts.set(orgId, (pendingHostedCallStarts.get(orgId) ?? 0) + 1);
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    const next = (pendingHostedCallStarts.get(orgId) ?? 1) - 1;
+    if (next <= 0) {
+      pendingHostedCallStarts.delete(orgId);
+    } else {
+      pendingHostedCallStarts.set(orgId, next);
+    }
+  };
+}
+
 async function ensureBillingAllowsCall(orgId: string, res?: http.ServerResponse): Promise<boolean> {
-  const gate = await assertCanStartLiveCall(orgId);
+  const gate = await assertCanStartLiveCall(orgId, {
+    reservedSecondsThisPeriod: getHostedReservedSecondsForOrg(orgId),
+  });
   if (gate.allowed === false) {
     console.warn(`[Billing] Live call blocked: ${gate.reason}`);
     if (res) {
@@ -553,6 +605,7 @@ async function ensureCallSession(params: {
   providerCallId?: string;
   contactName?: string;
   orgId?: string;
+  billingAuthorizedAt?: Date;
 }): Promise<CallSession> {
   const orgId = params.orgId || config.deployment.defaultOrgId;
   const existing = params.providerCallId
@@ -580,6 +633,10 @@ async function ensureCallSession(params: {
       matchedSession.contactName = params.contactName;
       updated = true;
     }
+    if (params.billingAuthorizedAt && !matchedSession.billingAuthorizedAt) {
+      matchedSession.billingAuthorizedAt = params.billingAuthorizedAt;
+      updated = true;
+    }
     if (updated) {
       await persistCallSession(matchedSession).catch((error) => {
         console.error('[Call] Failed to persist enriched session:', error);
@@ -597,6 +654,7 @@ async function ensureCallSession(params: {
     direction: params.direction,
     status: 'active',
     startedAt: new Date(),
+    billingAuthorizedAt: params.billingAuthorizedAt,
     duration: 0,
     transcript: [],
     actions: [],
@@ -631,28 +689,35 @@ async function attachSimulationAgent(
 }
 
 async function startOutboundCall(phone: string, purpose: string, orgId: string): Promise<CallSession> {
-  const billingAllowed = await ensureBillingAllowsCall(orgId);
-  if (!billingAllowed) {
-    throw new Error('Hosted usage requires an active billing subscription before outbound calls can start.');
+  const releaseReservation = reserveHostedCallStart(orgId);
+  try {
+    const billingAllowed = await ensureBillingAllowsCall(orgId);
+    if (!billingAllowed) {
+      throw new Error('Hosted usage requires an active billing subscription before outbound calls can start.');
+    }
+
+    const billingAuthorizedAt = new Date();
+    const providerCall = await telephony.makeCall(phone, { orgId });
+    const session = await ensureCallSession({
+      phone,
+      direction: 'outbound',
+      providerCallId: providerCall.callControlId,
+      orgId,
+      billingAuthorizedAt,
+    });
+
+    if (providerCall.callControlId.startsWith('simulated-') || !config.gemini.apiKey) {
+      await attachSimulationAgent(session, purpose);
+    }
+
+    console.log('[Call] Outbound started', {
+      phone: redactPhone(phone),
+      purpose: '[redacted]',
+    });
+    return session;
+  } finally {
+    releaseReservation();
   }
-
-  const providerCall = await telephony.makeCall(phone, { orgId });
-  const session = await ensureCallSession({
-    phone,
-    direction: 'outbound',
-    providerCallId: providerCall.callControlId,
-    orgId,
-  });
-
-  if (providerCall.callControlId.startsWith('simulated-') || !config.gemini.apiKey) {
-    await attachSimulationAgent(session, purpose);
-  }
-
-  console.log('[Call] Outbound started', {
-    phone: redactPhone(phone),
-    purpose: '[redacted]',
-  });
-  return session;
 }
 
 async function endCall(callId: string, options?: { hangupProvider?: boolean }): Promise<void> {
@@ -686,12 +751,16 @@ async function endCall(callId: string, options?: { hangupProvider?: boolean }): 
     console.error('[Call] Failed to persist session:', err);
   });
 
-  await recordCompletedCallUsage({
-    orgId: session.orgId || config.deployment.defaultOrgId,
-    callId: session.id,
-    durationSeconds: session.duration,
-    provider: telephony.getProvider(),
-  });
+  if (config.deployment.mode === 'hosted' && !session.billingAuthorizedAt) {
+    console.error(`[Billing] Skipping usage record for unauthorized hosted call session ${session.id}`);
+  } else {
+    await recordCompletedCallUsage({
+      orgId: session.orgId || config.deployment.defaultOrgId,
+      callId: session.id,
+      durationSeconds: session.duration,
+      provider: telephony.getProvider(),
+    });
+  }
 
   if (options?.hangupProvider && session.providerCallId) {
     await telephony.hangupCall(session.providerCallId).catch((error) => {
@@ -885,6 +954,7 @@ async function handleTelephonyVoiceRequest(event: Record<string, string>, res: h
     direction: context.direction,
     providerCallId: context.providerCallId,
     orgId,
+    billingAuthorizedAt: new Date(),
   });
 
   const inboundResponse = telephony.buildInboundResponse({
@@ -929,6 +999,12 @@ async function handleTelephonyStatusCallback(event: Record<string, string>, res:
 
     if (!session && result.callControlId && result.type !== 'ignored' && result.type !== 'call_hangup') {
       if (!callbackOrgId) {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: true, ignored: true }));
+        return;
+      }
+      if (config.deployment.mode === 'hosted') {
+        console.warn(`[Webhook] Ignored hosted ${telephony.getProvider()} status callback without an authorized live-call session`);
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ ok: true, ignored: true }));
         return;
@@ -1216,24 +1292,16 @@ if (telephony.getProvider() === 'asterisk') {
 
       await endCall(session.id);
     },
-    onCallReady: async ({
+    onCallPreflight: async ({
       providerCallId,
-      phone,
       direction,
       orgId: callbackOrgId,
       routeKey,
-      transport,
-    }: {
-      providerCallId: string;
-      phone: string;
-      direction: 'inbound' | 'outbound';
-      orgId?: string;
-      routeKey?: string;
-      transport: AsteriskExternalMediaTransport;
     }) => {
-      let session = findSessionByProviderCallId(providerCallId);
-      if (!session) {
-        const callOrgId = direction === 'inbound'
+      const session = findSessionByProviderCallId(providerCallId);
+      const resolvedOrgId = session
+        ? getSessionOrgId(session)
+        : direction === 'inbound'
           ? resolveInboundOrgId({
               deploymentMode: config.deployment.mode,
               defaultOrgId: config.deployment.defaultOrgId,
@@ -1243,26 +1311,49 @@ if (telephony.getProvider() === 'asterisk') {
               fallbackRouteKey: routeKey || getAsteriskInboundRouteFallback(),
             })
           : callbackOrgId || (config.deployment.mode === 'self_hosted' ? config.deployment.defaultOrgId : undefined);
-        if (!callOrgId) {
-          throw new Error(direction === 'inbound' ? 'Unknown hosted Asterisk inbound route' : 'Unknown hosted Asterisk outbound org');
+      if (!resolvedOrgId) {
+        throw new Error(direction === 'inbound' ? 'Unknown hosted Asterisk inbound route' : 'Unknown hosted Asterisk outbound org');
+      }
+
+      const releaseReservation = session ? () => undefined : reserveHostedCallStart(resolvedOrgId);
+      try {
+        const billingAllowed = await ensureBillingAllowsCall(resolvedOrgId);
+        if (!billingAllowed) {
+          throw new Error('Hosted usage requires an active billing subscription before Asterisk live calls can start.');
         }
+        return { orgId: resolvedOrgId, releaseReservation };
+      } catch (error) {
+        releaseReservation();
+        throw error;
+      }
+    },
+    onCallReady: async ({
+      providerCallId,
+      phone,
+      direction,
+      orgId,
+      transport,
+    }) => {
+      let session = findSessionByProviderCallId(providerCallId);
+      const billingAuthorizedAt = new Date();
+
+      if (session && getSessionOrgId(session) !== orgId) {
+        throw new Error('Asterisk call session belongs to another organization');
+      }
+
+      if (!session) {
         session = await ensureCallSession({
           phone,
           direction,
           providerCallId,
-          orgId: callOrgId,
+          orgId,
+          billingAuthorizedAt,
         });
-      }
-
-      const callOrgId = session.orgId || config.deployment.defaultOrgId;
-      const billingAllowed = await ensureBillingAllowsCall(callOrgId);
-      if (!billingAllowed) {
-        createLiveHooks(session).onAction({
-          type: 'billing_blocked',
-          description: 'Hosted usage requires an active billing subscription before Asterisk live calls can start.',
-          timestamp: new Date().toISOString(),
+      } else if (!session.billingAuthorizedAt) {
+        session.billingAuthorizedAt = billingAuthorizedAt;
+        await persistCallSession(session).catch((error) => {
+          console.error('[Call] Failed to persist Asterisk billing authorization:', error);
         });
-        throw new Error('Hosted usage requires an active billing subscription before Asterisk live calls can start.');
       }
 
       await hydrateCallMetadataFromProvider(session);
@@ -1313,9 +1404,10 @@ const server = http.createServer(async (req, res) => {
     }
 
     const context = telephony.extractCallContext(event);
+    const existingSession = findSessionByProviderCallId(context.providerCallId);
     const orgId = context.direction === 'inbound'
       ? resolveInboundOrgForEvent(event)
-      : findSessionByProviderCallId(context.providerCallId)?.orgId ||
+      : existingSession?.orgId ||
         (config.deployment.mode === 'self_hosted' ? config.deployment.defaultOrgId : undefined);
     if (!orgId) {
       console.warn(`[Webhook] Rejected unrouted hosted ${telephony.getProvider()} voice request`);
@@ -1323,20 +1415,27 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
-    const billingAllowed = await ensureBillingAllowsCall(orgId);
-    if (!billingAllowed) {
-      const response = telephony.buildInboundResponse({
-        sessionId: '',
-        providerCallId: event.CallSid || event.CallUUID || '',
-        phone: event.From || event.To || '',
-        useLiveStream: false,
-      });
-      res.writeHead(response.statusCode ?? 402, { 'Content-Type': response.contentType });
-      res.end(response.body);
-      return;
-    }
+    const releaseReservation = existingSession && getSessionOrgId(existingSession) === orgId
+      ? () => undefined
+      : reserveHostedCallStart(orgId);
+    try {
+      const billingAllowed = await ensureBillingAllowsCall(orgId);
+      if (!billingAllowed) {
+        const response = telephony.buildInboundResponse({
+          sessionId: '',
+          providerCallId: event.CallSid || event.CallUUID || '',
+          phone: event.From || event.To || '',
+          useLiveStream: false,
+        });
+        res.writeHead(response.statusCode ?? 402, { 'Content-Type': response.contentType });
+        res.end(response.body);
+        return;
+      }
 
-    await handleTelephonyVoiceRequest(event, res);
+      await handleTelephonyVoiceRequest(event, res);
+    } finally {
+      releaseReservation();
+    }
     return;
   }
 

@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { buildCurrentPeriodUsageWhere, evaluateBillingGate, getHostedUsageIngestEndpoint, isHostedSubscriptionActive } from './billing-guard';
+import {
+  allowsHostedTrialingUsage,
+  buildCurrentPeriodUsageWhere,
+  evaluateBillingGate,
+  getHostedQuotaSeconds,
+  getHostedUsageIngestEndpoint,
+  isHostedSubscriptionActive,
+} from './billing-guard';
 
 describe('billing-guard', () => {
   it('allows self-hosted usage without Stripe state', () => {
@@ -25,9 +32,45 @@ describe('billing-guard', () => {
     });
   });
 
-  it('treats active and trialing subscriptions as usable', () => {
+  it('blocks hosted usage when active or pending calls would overrun the quota', () => {
+    expect(evaluateBillingGate({
+      deploymentMode: 'hosted',
+      subscriptionStatus: 'active',
+      monthlyQuotaSeconds: 3600,
+      usedSecondsThisPeriod: 3000,
+      reservedSecondsThisPeriod: 600,
+    })).toEqual({ allowed: true });
+
+    expect(evaluateBillingGate({
+      deploymentMode: 'hosted',
+      subscriptionStatus: 'active',
+      monthlyQuotaSeconds: 3600,
+      usedSecondsThisPeriod: 3000,
+      reservedSecondsThisPeriod: 601,
+    })).toMatchObject({
+      allowed: false,
+      reason: 'quota_exhausted',
+    });
+  });
+
+  it('blocks hosted usage against the default launch quota when an active org has no stored quota', () => {
+    expect(getHostedQuotaSeconds(0, { HOSTED_MONTHLY_INCLUDED_MINUTES: '2' })).toBe(120);
+    expect(evaluateBillingGate({
+      deploymentMode: 'hosted',
+      subscriptionStatus: 'active',
+      monthlyQuotaSeconds: 0,
+      usedSecondsThisPeriod: 60 * 60,
+    })).toMatchObject({
+      allowed: false,
+      reason: 'quota_exhausted',
+    });
+  });
+
+  it('requires paid active subscriptions by default', () => {
     expect(isHostedSubscriptionActive('active')).toBe(true);
-    expect(isHostedSubscriptionActive('trialing')).toBe(true);
+    expect(isHostedSubscriptionActive('trialing')).toBe(false);
+    expect(isHostedSubscriptionActive('trialing', { HOSTED_ALLOW_TRIALING_USAGE: 'true' })).toBe(true);
+    expect(allowsHostedTrialingUsage({ HOSTED_ALLOW_TRIALING_USAGE: 'true' })).toBe(true);
     expect(isHostedSubscriptionActive('canceled')).toBe(false);
   });
 

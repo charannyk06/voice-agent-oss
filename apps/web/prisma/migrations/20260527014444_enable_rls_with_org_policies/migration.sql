@@ -24,9 +24,9 @@
 -- subscription, or a CMS-style read endpoint). They expect Clerk's JWT to
 -- be re-signed with the Supabase project's JWT secret and to carry an
 -- `org_id` custom claim that matches `Organization.id`. Until that
--- bridging is wired, the 'authenticated' role still has no grants on
--- these tables (added below), but the bridging step is documented as a
--- follow-up in SECURITY.md and the incident report.
+-- bridging is wired, the 'authenticated' role can have grants, but no rows
+-- are visible without a valid org_id claim. The bridging step is documented
+-- as a follow-up in SECURITY.md and the incident report.
 --
 -- DO NOT change the connection role from 'postgres' without re-auditing
 -- every policy here. If Prisma ever connects as 'authenticated' or
@@ -80,13 +80,13 @@ ALTER TABLE public."UsageEvent"          ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public."UserMembership"      ENABLE ROW LEVEL SECURITY;
 
 -- ---------------------------------------------------------------------------
--- Grants. `authenticated` needs DML privileges before any policy can apply;
--- without these, queries fail with "permission denied for table ..." at the
--- grant layer and never reach RLS. `anon` deliberately gets NO grants —
--- public unauthenticated traffic is denied at the grant layer (first line of
--- defense) AND has no policy (second line of defense).
+-- Grants. Reset direct Supabase role access first, then grant the minimum
+-- needed for future Clerk-Supabase clients. Billing-trusted tables are read-only
+-- for authenticated clients. Only server-side Prisma/webhook code may mutate
+-- Organization.subscriptionStatus, BillingSubscription, or UsageEvent rows.
+-- `anon` deliberately gets NO grants.
 -- ---------------------------------------------------------------------------
-GRANT SELECT, INSERT, UPDATE, DELETE ON
+REVOKE ALL ON
   public."AgentConfig",
   public."AgentToolConfig",
   public."Appointment",
@@ -102,10 +102,34 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON
   public."Memory",
   public."Notification",
   public."Organization",
+  public."StripeWebhookEvent",
   public."UsageEvent",
   public."UserMembership"
+FROM anon, authenticated;
+
+GRANT SELECT, INSERT, UPDATE, DELETE ON
+  public."AgentConfig",
+  public."AgentToolConfig",
+  public."Appointment",
+  public."Approval",
+  public."AutoApproveRule",
+  public."BlockedNumber",
+  public."Call",
+  public."CallAction",
+  public."Contact",
+  public."CostEntry",
+  public."KnowledgeDoc",
+  public."Memory",
+  public."Notification",
+  public."UserMembership"
 TO authenticated;
--- StripeWebhookEvent stays grant-less for authenticated — only the webhook
+
+GRANT SELECT ON
+  public."BillingSubscription",
+  public."Organization",
+  public."UsageEvent"
+TO authenticated;
+-- StripeWebhookEvent stays grant-less for authenticated. Only the webhook
 -- handler (running as postgres / service_role) writes to it; nothing in the
 -- 'authenticated' path has a legitimate reason to touch it.
 
@@ -205,14 +229,14 @@ CREATE POLICY "authenticated_can_see_own_org" ON public."Notification"
   FOR ALL TO authenticated
   USING      ("orgId" = app.current_org_id())
   WITH CHECK ("orgId" = app.current_org_id());
+-- Billing-trusted ledgers are read-only to authenticated clients. Server-side
+-- Prisma/webhook code is the only writer because hosted usage gates trust them.
 CREATE POLICY "authenticated_can_see_own_org" ON public."BillingSubscription"
-  FOR ALL TO authenticated
-  USING      ("orgId" = app.current_org_id())
-  WITH CHECK ("orgId" = app.current_org_id());
+  FOR SELECT TO authenticated
+  USING      ("orgId" = app.current_org_id());
 CREATE POLICY "authenticated_can_see_own_org" ON public."UsageEvent"
-  FOR ALL TO authenticated
-  USING      ("orgId" = app.current_org_id())
-  WITH CHECK ("orgId" = app.current_org_id());
+  FOR SELECT TO authenticated
+  USING      ("orgId" = app.current_org_id());
 
 -- C — UserMembership (orgId-scoped; could tighten to clerkUserId later)
 CREATE POLICY "authenticated_can_see_own_org" ON public."UserMembership"
@@ -220,11 +244,11 @@ CREATE POLICY "authenticated_can_see_own_org" ON public."UserMembership"
   USING      ("orgId" = app.current_org_id())
   WITH CHECK ("orgId" = app.current_org_id());
 
--- B — Organization (keyed by id, not orgId)
+-- B — Organization (keyed by id, not orgId). Read-only to authenticated clients
+-- because subscriptionStatus and quota fields are billing-trusted server state.
 CREATE POLICY "authenticated_can_see_own_org" ON public."Organization"
-  FOR ALL TO authenticated
-  USING      ("id" = app.current_org_id())
-  WITH CHECK ("id" = app.current_org_id());
+  FOR SELECT TO authenticated
+  USING      ("id" = app.current_org_id());
 
 -- D — Memory: scoped through Contact
 CREATE POLICY "authenticated_via_parent_contact" ON public."Memory"

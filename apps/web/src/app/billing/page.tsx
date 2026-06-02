@@ -17,6 +17,7 @@ interface BillingStatus {
   quotaSeconds: number;
   usedSeconds: number;
   usagePercent: number;
+  quotaExhausted?: boolean;
 }
 
 function formatMinutes(seconds: number) {
@@ -118,10 +119,10 @@ export default function BillingPage() {
             </p>
           </div>
           <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row">
-            {hosted ? (
+            {hosted && !status?.active ? (
               <Button onClick={handleCheckout} disabled={busyAction !== null} className="w-full sm:w-auto">
                 {busyAction === "checkout" ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <CreditCard className="mr-2 h-4 w-4" />}
-                {status?.active ? "Change plan" : "Start subscription"}
+                Start subscription
               </Button>
             ) : null}
             {status?.stripeCustomerId ? (
@@ -160,7 +161,9 @@ export default function BillingPage() {
                 {hosted
                   ? status?.active
                     ? "Hosted calls are enabled for this workspace."
-                    : "Hosted calls are blocked until Stripe marks the subscription active."
+                    : status?.quotaExhausted
+                      ? "Hosted calls are blocked because the included monthly voice minutes are exhausted."
+                      : "Hosted calls are blocked until Stripe marks the subscription active."
                   : "Self-hosted mode is enabled. Users bring their own telephony and model credentials."}
               </p>
             </CardContent>

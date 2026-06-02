@@ -55,8 +55,8 @@ The hosted product should behave like this:
 
 1. User signs in with Clerk.
 2. User starts Stripe Checkout for the one monthly plan.
-3. Stripe webhook marks the organization `active` or `trialing`.
-4. Agent allows live calls only while subscription is usable and monthly quota is not exhausted.
+3. Stripe webhook marks the organization `active` after payment succeeds.
+4. Agent allows live calls only while the subscription is active and monthly quota is not exhausted. `trialing` usage stays blocked unless `HOSTED_ALLOW_TRIALING_USAGE=true` is explicitly set.
 5. Completed calls record `voice_seconds` in the local usage ledger.
 6. Dashboard shows subscription status, included minutes, used minutes, and quota percentage.
 

@@ -78,7 +78,20 @@ describe('config', () => {
 
   it('resolves production-style security defaults for hosted deployments', () => {
     expect(resolveDeploymentMode({ DEPLOYMENT_MODE: 'hosted' })).toBe('hosted');
+    expect(resolveDeploymentMode({ DEPLOYMENT_MODE: 'self_hosted' })).toBe('self_hosted');
+    expect(resolveDeploymentMode({ DEPLOYMENT_MODE: 'self_hosted', BILLING_USAGE_INGEST_URL: 'https://dashboard.example.com', BILLING_USAGE_INGEST_SECRET: 'secret' })).toBe('hosted');
     expect(resolveDeploymentMode({ DEPLOYMENT_MODE: 'unexpected' })).toBe('self_hosted');
+    expect(resolveDeploymentMode({ DEPLOYMENT_MODE: 'unexpected', NODE_ENV: 'production', INBOUND_ORG_ROUTES: 'twilio:+155****0100=org_1' })).toBe('hosted');
+    expect(resolveDeploymentMode({ BILLING_USAGE_INGEST_URL: 'https://dashboard.example.com', BILLING_USAGE_INGEST_SECRET: 'secret' })).toBe('hosted');
+    expect(resolveDeploymentMode({ BILLING_USAGE_INGEST_SECRET: 'secret' })).toBe('hosted');
+    expect(resolveDeploymentMode({ NODE_ENV: 'production', INBOUND_ORG_ROUTES: 'twilio:+155****0100=org_1' })).toBe('hosted');
+    expect(resolveDeploymentMode({ NODE_ENV: 'production', GEMINI_API_KEY: 'live-model-key' })).toBe('hosted');
+    expect(resolveDeploymentMode({ NODE_ENV: 'production', TWILIO_ACCOUNT_SID: 'AC123' })).toBe('hosted');
+    expect(resolveDeploymentMode({ NODE_ENV: 'production', ASTERISK_ARI_BASE_URL: 'https://pbx.example.com' })).toBe('hosted');
+    expect(resolveDeploymentMode({ NODE_ENV: 'production', DEPLOYMENT_MODE: 'self_hosted', GEMINI_API_KEY: 'live-model-key' })).toBe('hosted');
+    expect(resolveDeploymentMode({ NODE_ENV: 'production', DEPLOYMENT_MODE: 'self_hosted', ALLOW_PRODUCTION_SELF_HOSTED: 'true', GEMINI_API_KEY: 'live-model-key' })).toBe('self_hosted');
+    expect(resolveDeploymentMode({ INBOUND_ORG_ROUTES: 'twilio:+155****0100=org_1' })).toBe('self_hosted');
+    expect(resolveDeploymentMode({ NODE_ENV: 'production', BILLING_USAGE_INGEST_URL: 'https://dashboard.example.com' })).toBe('hosted');
     expect(resolveProductionLike({ DEPLOYMENT_MODE: 'hosted' })).toBe(true);
     expect(resolveProductionLike({ NODE_ENV: 'production' })).toBe(true);
     expect(resolveProductionLike({ NODE_ENV: 'development', DEPLOYMENT_MODE: 'self_hosted' })).toBe(false);

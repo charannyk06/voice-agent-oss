@@ -1,6 +1,7 @@
 import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 import type Stripe from "stripe";
 import { ApiError } from "./api";
+import { buildCurrentPeriodUsageWhere, getDeploymentMode, getHostedQuotaSeconds, isSubscriptionUsable } from "./billing";
 import { prisma } from "./prisma";
 import { getSharedSecretValidationIssue } from "./secret-safety";
 import { getStripeClient } from "./stripe";
@@ -8,6 +9,11 @@ import { getStripeClient } from "./stripe";
 export interface UsageMeterEnv {
   BILLING_USAGE_INGEST_SECRET?: string;
   DEPLOYMENT_MODE?: string;
+  NODE_ENV?: string;
+  VERCEL_ENV?: string;
+  STRIPE_SECRET_KEY?: string;
+  STRIPE_PRICE_ID?: string;
+  STRIPE_PRICE_BASE_MONTHLY?: string;
   STRIPE_METER_EVENT_NAME?: string;
   STRIPE_METER_CUSTOMER_KEY?: string;
   STRIPE_METER_VALUE_KEY?: string;
@@ -80,7 +86,8 @@ export function verifyUsageIngestAuthorization(
   if (!secret) {
     throw new ApiError(500, "Usage ingest secret is not configured");
   }
-  if ((env ?? process.env).DEPLOYMENT_MODE === "hosted") {
+  const deploymentMode = getDeploymentMode(env);
+  if (deploymentMode === "hosted") {
     const secretIssue = getSharedSecretValidationIssue("Usage ingest secret", secret);
     if (secretIssue) {
       throw new ApiError(500, secretIssue);
@@ -112,14 +119,6 @@ export function verifyUsageIngestAuthorization(
     return;
   }
 
-  if ((env ?? process.env).DEPLOYMENT_MODE !== "hosted") {
-    const expected = `Bearer ${secret}`;
-    const supplied = headers.get("authorization") || "";
-    if (constantTimeEqual(supplied, expected)) {
-      return;
-    }
-  }
-
   throw new ApiError(401, "Unauthorized usage ingest request");
 }
 
@@ -144,6 +143,36 @@ export function normalizeUsageQuantity(durationSeconds: number): number {
     throw new ApiError(400, "durationSeconds must be a positive number");
   }
   return Math.ceil(durationSeconds);
+}
+
+export type HostedUsageIngestGateResult =
+  | { allowed: true }
+  | { allowed: false; reason: "subscription_inactive" | "quota_exhausted"; message: string };
+
+export function evaluateHostedUsageIngestGate(input: {
+  subscriptionStatus?: string | null;
+  usedSecondsThisPeriod?: number | null;
+  incomingSeconds: number;
+  quotaSeconds: number;
+}): HostedUsageIngestGateResult {
+  if (!isSubscriptionUsable(input.subscriptionStatus)) {
+    return {
+      allowed: false,
+      reason: "subscription_inactive",
+      message: "Hosted usage can only be recorded for an active paid billing subscription.",
+    };
+  }
+
+  const used = Math.max(0, input.usedSecondsThisPeriod ?? 0);
+  if (input.quotaSeconds > 0 && used + input.incomingSeconds > input.quotaSeconds) {
+    return {
+      allowed: false,
+      reason: "quota_exhausted",
+      message: "Hosted usage quota is exhausted for this billing period.",
+    };
+  }
+
+  return { allowed: true };
 }
 
 export function createStripeMeterIdentifier(orgId: string, callId: string): string {
@@ -186,7 +215,17 @@ export async function recordHostedVoiceUsage(input: VoiceUsageInput): Promise<{
   const quantity = normalizeUsageQuantity(input.durationSeconds);
   const org = await prisma.organization.findUnique({
     where: { id: input.orgId },
-    select: { id: true, stripeCustomerId: true },
+    select: {
+      id: true,
+      stripeCustomerId: true,
+      subscriptionStatus: true,
+      minuteQuotaMonthly: true,
+      subscriptions: {
+        where: { status: { in: ["active", "trialing"] } },
+        orderBy: { currentPeriodEnd: "desc" },
+        take: 1,
+      },
+    },
   });
 
   if (!org) {
@@ -194,29 +233,58 @@ export async function recordHostedVoiceUsage(input: VoiceUsageInput): Promise<{
   }
 
   let duplicate = false;
-  let usageEvent = await prisma.usageEvent.create({
-    data: {
+  let usageEvent = await prisma.usageEvent.findFirst({
+    where: {
       orgId: input.orgId,
       callId: input.callId,
       kind: "voice_seconds",
-      quantity,
-      unit: "second",
-      provider: input.provider,
-      createdAt: input.occurredAt ?? undefined,
     },
-  }).catch(async (error: unknown) => {
-    if (!isUniqueConstraintError(error)) {
-      throw error;
-    }
+  });
+
+  if (usageEvent) {
     duplicate = true;
-    return prisma.usageEvent.findFirst({
-      where: {
+  } else {
+    const currentSubscription = org.subscriptions[0];
+    const usedSeconds = await prisma.usageEvent.aggregate({
+      where: buildCurrentPeriodUsageWhere(org.id, currentSubscription ?? undefined),
+      _sum: { quantity: true },
+    });
+    const quotaSeconds = getHostedQuotaSeconds(org.minuteQuotaMonthly);
+    const gate = evaluateHostedUsageIngestGate({
+      subscriptionStatus: currentSubscription?.status ?? org.subscriptionStatus,
+      usedSecondsThisPeriod: usedSeconds._sum.quantity ?? 0,
+      incomingSeconds: quantity,
+      quotaSeconds,
+    });
+
+    if (gate.allowed === false) {
+      throw new ApiError(402, gate.message);
+    }
+
+    usageEvent = await prisma.usageEvent.create({
+      data: {
         orgId: input.orgId,
         callId: input.callId,
         kind: "voice_seconds",
+        quantity,
+        unit: "second",
+        provider: input.provider,
+        createdAt: input.occurredAt ?? undefined,
       },
+    }).catch(async (error: unknown) => {
+      if (!isUniqueConstraintError(error)) {
+        throw error;
+      }
+      duplicate = true;
+      return prisma.usageEvent.findFirst({
+        where: {
+          orgId: input.orgId,
+          callId: input.callId,
+          kind: "voice_seconds",
+        },
+      });
     });
-  });
+  }
 
   if (!usageEvent) {
     throw new ApiError(409, "Usage event already exists but could not be loaded");

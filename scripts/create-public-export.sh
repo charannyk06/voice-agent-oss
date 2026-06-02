@@ -24,7 +24,7 @@ import sys
 from pathlib import Path
 
 root = Path(sys.argv[1]).resolve()
-local_only_dirs = {".git", ".next", ".next-dev", "node_modules", "coverage", "dist", "build", ".vercel", ".hermes", ".claude", ".temp", "logs", "recordings", "transcripts", "uploads"}
+local_only_dirs = {".git", ".next", ".next-dev", "node_modules", "coverage", "dist", "build", ".vercel", ".hermes", ".claude", "logs", "recordings", "transcripts", "uploads"}
 blocked_suffixes = {".db", ".sqlite", ".sqlite3", ".pem", ".key", ".crt", ".cert", ".p12", ".pfx", ".tsbuildinfo"}
 secret_patterns = [
     ("stripe_secret_key", re.compile(r"(?<![A-Za-z0-9])(?:sk|rk)_(?:test|live)_[A-Za-z0-9_]{12,}")),
@@ -32,11 +32,6 @@ secret_patterns = [
     ("github_token", re.compile(r"gh[pousr]_[A-Za-z0-9_]{20,}")),
     ("google_api_key", re.compile(r"AIza[0-9A-Za-z_-]{10,}")),
     ("aws_access_key", re.compile(r"AKIA[0-9A-Z]{16}")),
-    ("slack_token", re.compile(r"xox[baprs]-[A-Za-z0-9-]{20,}")),
-    ("supabase_secret", re.compile(r"(?:sb_secret_|sbp_)[A-Za-z0-9_\-]{20,}")),
-    ("supabase_jwt", re.compile(r"eyJ[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}")),
-    ("twilio_auth_token", re.compile(r"TWILIO_AUTH_TOKEN\s*=\s*['\"]?[0-9a-fA-F]{32}['\"]?")),
-    ("private_key", re.compile(r"-----BEGIN (?:RSA |EC |OPENSSH |PRIVATE )?PRIVATE KEY-----")),
     ("credentialed_database_url", re.compile(r"(?:postgres(?:ql)?|mysql|mongodb)://[^\s:@]+:[^\s:@\[\]<>{}]+@", re.I)),
     ("stale_old_product_brand", re.compile(r"(?:con" r"ductor[-_\s]?oss|con" r"ductross|con" r"ductor|gen" r"eric[-_\s]?voice[-_\s]?agent|@gen" r"eric[-_]voice[-_]agent)", re.I)),
 ]

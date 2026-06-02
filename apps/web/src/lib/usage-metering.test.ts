@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   createStripeMeterIdentifier,
+  evaluateHostedUsageIngestGate,
   getStripeMeterConfig,
   getUsageIngestSecret,
   normalizeUsageQuantity,
@@ -96,6 +97,23 @@ test('verifyUsageIngestAuthorization rejects unsafe hosted ingest secrets', () =
   assert.throws(
     () => verifyUsageIngestAuthorization(
       new Headers({ 'x-usage-timestamp': '1710000000', 'x-usage-signature': 'sha256=ignored' }),
+      {
+        BILLING_USAGE_INGEST_SECRET: unsafeUsageSecret,
+        VERCEL_ENV: 'production',
+      },
+      {
+        rawBody: '{}',
+        orgId: 'org_abc',
+        callId: 'call_123',
+        durationSeconds: 60,
+        now: new Date(1710000000 * 1000),
+      },
+    ),
+    /must not use a documented placeholder or example value/,
+  );
+  assert.throws(
+    () => verifyUsageIngestAuthorization(
+      new Headers({ 'x-usage-timestamp': '1710000000', 'x-usage-signature': 'sha256=ignored' }),
       { BILLING_USAGE_INGEST_SECRET: 'a'.repeat(32), DEPLOYMENT_MODE: 'hosted' },
       {
         rawBody: '{}',
@@ -109,18 +127,59 @@ test('verifyUsageIngestAuthorization rejects unsafe hosted ingest secrets', () =
   );
 });
 
-test('verifyUsageIngestAuthorization keeps bearer fallback outside hosted mode only', () => {
-  assert.doesNotThrow(() => verifyUsageIngestAuthorization(
-    new Headers({ authorization: 'Bearer right' }),
-    { BILLING_USAGE_INGEST_SECRET: 'right', DEPLOYMENT_MODE: 'self_hosted' },
-  ));
+test('verifyUsageIngestAuthorization rejects bearer fallback because usage secrets force hosted mode', () => {
   assert.throws(
     () => verifyUsageIngestAuthorization(
-      new Headers({ authorization: 'Bearer right' }),
+      new Headers({ authorization: `Bearer ${safeUsageSecret}` }),
+      { BILLING_USAGE_INGEST_SECRET: safeUsageSecret, DEPLOYMENT_MODE: 'self_hosted' },
+    ),
+    /Unauthorized usage ingest request/,
+  );
+  assert.throws(
+    () => verifyUsageIngestAuthorization(
+      new Headers({ authorization: `Bearer ${safeUsageSecret}` }),
       { BILLING_USAGE_INGEST_SECRET: safeUsageSecret, DEPLOYMENT_MODE: 'hosted' },
     ),
     /Unauthorized usage ingest request/,
   );
+  assert.throws(
+    () => verifyUsageIngestAuthorization(
+      new Headers({ authorization: `Bearer ${safeUsageSecret}` }),
+      { BILLING_USAGE_INGEST_SECRET: safeUsageSecret, VERCEL_ENV: 'production' },
+    ),
+    /Unauthorized usage ingest request/,
+  );
+});
+
+test('hosted usage ingest gate requires a paid active subscription and remaining quota', () => {
+  assert.deepEqual(evaluateHostedUsageIngestGate({
+    subscriptionStatus: 'active',
+    usedSecondsThisPeriod: 30,
+    incomingSeconds: 30,
+    quotaSeconds: 60,
+  }), { allowed: true });
+
+  assert.deepEqual(evaluateHostedUsageIngestGate({
+    subscriptionStatus: 'trialing',
+    usedSecondsThisPeriod: 0,
+    incomingSeconds: 30,
+    quotaSeconds: 60,
+  }), {
+    allowed: false,
+    reason: 'subscription_inactive',
+    message: 'Hosted usage can only be recorded for an active paid billing subscription.',
+  });
+
+  assert.deepEqual(evaluateHostedUsageIngestGate({
+    subscriptionStatus: 'active',
+    usedSecondsThisPeriod: 31,
+    incomingSeconds: 30,
+    quotaSeconds: 60,
+  }), {
+    allowed: false,
+    reason: 'quota_exhausted',
+    message: 'Hosted usage quota is exhausted for this billing period.',
+  });
 });
 
 test('getStripeMeterConfig returns null until a meter event name is configured', () => {

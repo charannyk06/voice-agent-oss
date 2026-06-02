@@ -29,26 +29,29 @@ The remaining live blockers are operational, not source-code blockers:
 - Protected media stream upgrades with signed stream tokens, optional IP/origin allowlists, and rate limiting.
 - Hardened hosted usage ingest with HMAC headers: `X-Usage-Timestamp` and `X-Usage-Signature`.
 - Bound usage signatures to raw body, org id, call id, and duration.
-- Kept the old bearer usage fallback only outside hosted mode.
+- Disabled the old bearer usage fallback. Usage ingest now requires HMAC signatures once a usage-ingest URL or secret is configured.
 - Added PII-safe logging for transcripts, tool calls, phone numbers, approvals, and memory writes.
 - Updated dependency overrides and lockfile so npm audit reports no vulnerabilities.
 - Replaced credential-shaped example placeholders with non-secret placeholders.
 - Added `scripts/create-public-export.sh` to create a tracked-file-only public export after the sanitized tree is committed.
-- Added a Prisma RLS migration for Supabase public tables and expanded public export scanning for Supabase, Slack, JWT, private-key, and Twilio token patterns.
-- Documented that Supabase deployments must run `prisma migrate deploy` before exposing a project URL, and must re-audit RLS if the Prisma connection role changes.
+- Added and tightened the Prisma RLS migration for Supabase public tables. Tenant roles can read scoped billing rows, but billing-trusted writes stay server-owned.
 
 ## Verification run
 
-- `npm test` passed. Agent: 17 files, 70 tests. Web: 23 tests.
+- `npm test` passed. Agent: 18 files, 77 tests. Web: 30 tests.
 - `npm run lint` passed.
 - `npm run build` passed for agent and web.
 - `npm audit --prefix apps/agent --omit=dev --audit-level=moderate` passed with 0 vulnerabilities.
-- `npm audit --prefix apps/web --audit-level=high` passed with 0 vulnerabilities.
+- `npm audit --prefix apps/web --omit=dev --audit-level=moderate` passed with 0 vulnerabilities.
+- `semgrep scan --config=p/owasp-top-ten --error apps/agent/src apps/web/src` passed with 0 findings.
+- `trufflehog filesystem . --only-verified --fail --no-update` and `trufflehog git file://... --only-verified --fail --no-update` passed with 0 verified secrets.
 - `git diff --check` passed.
-- Tracked-file high-confidence secret pattern grep found 0 results after placeholder cleanup.
+- Tracked-file high-confidence secret, private identity, local workspace, and forbidden artifact scans found 0 results after placeholder cleanup.
+- API route auth scan found 0 unprotected private routes. Stripe and usage webhooks keep raw-body signature checks.
 - Local hosted smoke check passed:
   - `/health` returned `200 {"status":"ok"}`.
   - `/health/details` returned `401` without a dashboard token.
+  - `/calls/active` returned `401` without a dashboard token.
 
 ## Stripe status
 

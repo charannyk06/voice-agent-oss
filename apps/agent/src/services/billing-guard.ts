@@ -1,5 +1,6 @@
 import { prisma } from './prisma';
 import { config } from '../config';
+import { getHostedBillingSnapshotFromPostgres } from './hosted-billing-database';
 import { signUsageIngestRequest } from './usage-signature';
 
 export type DeploymentMode = 'self_hosted' | 'hosted';
@@ -9,14 +10,43 @@ export interface BillingGateInput {
   subscriptionStatus?: string | null;
   monthlyQuotaSeconds?: number | null;
   usedSecondsThisPeriod?: number | null;
+  reservedSecondsThisPeriod?: number | null;
 }
 
 export type BillingGateResult =
   | { allowed: true }
-  | { allowed: false; reason: 'subscription_inactive' | 'quota_exhausted'; message: string };
+  | { allowed: false; reason: 'subscription_inactive' | 'quota_exhausted' | 'billing_unavailable'; message: string };
 
-export function isHostedSubscriptionActive(status?: string | null): boolean {
-  return status === 'active' || status === 'trialing';
+export function allowsHostedTrialingUsage(env?: { HOSTED_ALLOW_TRIALING_USAGE?: string }): boolean {
+  return (env ?? process.env).HOSTED_ALLOW_TRIALING_USAGE === 'true';
+}
+
+export function isHostedSubscriptionActive(
+  status?: string | null,
+  env?: { HOSTED_ALLOW_TRIALING_USAGE?: string },
+): boolean {
+  return status === 'active' || (status === 'trialing' && allowsHostedTrialingUsage(env));
+}
+
+export const DEFAULT_HOSTED_MONTHLY_INCLUDED_MINUTES = 60;
+
+export function getHostedIncludedMinutes(env?: {
+  HOSTED_MONTHLY_INCLUDED_MINUTES?: string;
+  STRIPE_INCLUDED_MINUTES?: string;
+}) {
+  const source = env ?? process.env;
+  const parsed = Number(source.HOSTED_MONTHLY_INCLUDED_MINUTES || source.STRIPE_INCLUDED_MINUTES || DEFAULT_HOSTED_MONTHLY_INCLUDED_MINUTES);
+  return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : DEFAULT_HOSTED_MONTHLY_INCLUDED_MINUTES;
+}
+
+export function getHostedQuotaSeconds(monthlyQuotaSeconds?: number | null, env?: {
+  HOSTED_MONTHLY_INCLUDED_MINUTES?: string;
+  STRIPE_INCLUDED_MINUTES?: string;
+}) {
+  if (monthlyQuotaSeconds && monthlyQuotaSeconds > 0) {
+    return Math.floor(monthlyQuotaSeconds);
+  }
+  return getHostedIncludedMinutes(env) * 60;
 }
 
 export function evaluateBillingGate(input: BillingGateInput): BillingGateResult {
@@ -32,13 +62,22 @@ export function evaluateBillingGate(input: BillingGateInput): BillingGateResult 
     };
   }
 
-  const quota = input.monthlyQuotaSeconds ?? 0;
-  const used = input.usedSecondsThisPeriod ?? 0;
-  if (quota > 0 && used >= quota) {
+  const quota = getHostedQuotaSeconds(input.monthlyQuotaSeconds);
+  const used = Math.max(0, input.usedSecondsThisPeriod ?? 0);
+  if (used >= quota) {
     return {
       allowed: false,
       reason: 'quota_exhausted',
       message: 'Hosted usage quota is exhausted for this billing period.',
+    };
+  }
+
+  const reserved = Math.max(0, input.reservedSecondsThisPeriod ?? 0);
+  if (reserved > 0 && used + reserved > quota) {
+    return {
+      allowed: false,
+      reason: 'quota_exhausted',
+      message: 'Hosted usage quota is reserved by active or pending calls for this billing period.',
     };
   }
 
@@ -60,6 +99,11 @@ export function buildCurrentPeriodUsageWhere(orgId: string, period?: {
 }
 
 export async function getHostedBillingSnapshot(orgId: string) {
+  const postgresSnapshot = await getHostedBillingSnapshotFromPostgres(orgId);
+  if (postgresSnapshot) {
+    return postgresSnapshot;
+  }
+
   const org = await prisma.organization.findUnique({
     where: { id: orgId },
     include: {
@@ -69,33 +113,45 @@ export async function getHostedBillingSnapshot(orgId: string) {
         take: 1,
       },
     },
-  }).catch(() => null);
+  });
 
   const currentSubscription = org?.subscriptions[0];
   const usedSeconds = org
     ? await prisma.usageEvent.aggregate({
         where: buildCurrentPeriodUsageWhere(org.id, currentSubscription ?? undefined),
         _sum: { quantity: true },
-      }).catch(() => ({ _sum: { quantity: 0 } }))
+      })
     : { _sum: { quantity: 0 } };
 
   return {
-    subscriptionStatus: org?.subscriptionStatus ?? currentSubscription?.status ?? 'inactive',
+    subscriptionStatus: currentSubscription?.status ?? org?.subscriptionStatus ?? 'inactive',
     monthlyQuotaSeconds: org?.minuteQuotaMonthly ? org.minuteQuotaMonthly * 60 : 0,
     usedSecondsThisPeriod: usedSeconds._sum.quantity ?? 0,
   };
 }
 
-export async function assertCanStartLiveCall(orgId: string): Promise<BillingGateResult> {
+export async function assertCanStartLiveCall(orgId: string, options?: {
+  reservedSecondsThisPeriod?: number;
+}): Promise<BillingGateResult> {
   if (config.deployment.mode === 'self_hosted') {
     return { allowed: true };
   }
 
-  const snapshot = await getHostedBillingSnapshot(orgId);
-  return evaluateBillingGate({
-    deploymentMode: config.deployment.mode,
-    ...snapshot,
-  });
+  try {
+    const snapshot = await getHostedBillingSnapshot(orgId);
+    return evaluateBillingGate({
+      deploymentMode: config.deployment.mode,
+      reservedSecondsThisPeriod: options?.reservedSecondsThisPeriod,
+      ...snapshot,
+    });
+  } catch (error) {
+    console.error('[Billing] Hosted billing lookup failed; blocking live call start:', error);
+    return {
+      allowed: false,
+      reason: 'billing_unavailable',
+      message: 'Hosted billing state is temporarily unavailable. Live calls are disabled until billing can be verified.',
+    };
+  }
 }
 
 export function getHostedUsageIngestEndpoint(rawUrl = config.billing.usageIngestUrl): string | null {

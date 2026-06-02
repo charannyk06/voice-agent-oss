@@ -55,7 +55,6 @@ npm-debug.log*
 # Local agent/operator workspace files
 .hermes/
 .claude/
-supabase/.temp/
 
 # Coverage and key material
 coverage/

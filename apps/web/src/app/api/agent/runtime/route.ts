@@ -7,7 +7,13 @@ const agentBaseUrl =
   process.env.AGENT_URL ||
   "http://localhost:3012";
 
-export async function GET() {
+function getDashboardOrigin(request: Request) {
+  const configured = process.env.NEXT_PUBLIC_APP_URL || process.env.PUBLIC_APP_URL;
+  if (configured) return configured.replace(/\/$/, "");
+  return new URL(request.url).origin;
+}
+
+export async function GET(request: Request) {
   try {
     const { userId, orgId } = await requireDashboardUser();
     let health: Record<string, unknown> | null = null;
@@ -28,7 +34,11 @@ export async function GET() {
     try {
       const response = await fetch(`${agentBaseUrl}/health/details`, {
         cache: "no-store",
-        headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+        headers: token ? {
+          Authorization: `Bearer ${token}`,
+          Origin: getDashboardOrigin(request),
+          "X-Dashboard-Origin": getDashboardOrigin(request),
+        } : undefined,
       });
       if (response.ok) {
         health = (await response.json()) as Record<string, unknown>;

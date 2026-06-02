@@ -1,5 +1,7 @@
-import 'dotenv/config';
+import { config as loadEnv } from 'dotenv';
 import { buildInboundOrgRouteMap, parseInboundOrgRoutes } from './services/inbound-routing';
+
+loadEnv({ override: true, quiet: true });
 
 export type TelephonyProviderName = 'twilio' | 'plivo' | 'asterisk';
 
@@ -114,16 +116,75 @@ export function normalizeHostedServiceUrl(value: string): string | null {
 
 const dashboardAllowedOriginValues = csv(process.env.DASHBOARD_ALLOWED_ORIGINS);
 
-export function resolveDeploymentMode(env?: { DEPLOYMENT_MODE?: string }): 'self_hosted' | 'hosted' {
-  return (env ?? process.env).DEPLOYMENT_MODE === 'hosted' ? 'hosted' : 'self_hosted';
+interface DeploymentModeEnv {
+  DEPLOYMENT_MODE?: string;
+  NODE_ENV?: string;
+  ALLOW_PRODUCTION_SELF_HOSTED?: string;
+  BILLING_USAGE_INGEST_URL?: string;
+  BILLING_USAGE_INGEST_SECRET?: string;
+  INBOUND_ORG_ROUTES?: string;
+  GEMINI_API_KEY?: string;
+  TWILIO_ACCOUNT_SID?: string;
+  TWILIO_AUTH_TOKEN?: string;
+  TWILIO_PHONE_NUMBER?: string;
+  TWILIO_PUBLIC_BASE_URL?: string;
+  PLIVO_AUTH_ID?: string;
+  PLIVO_AUTH_TOKEN?: string;
+  PLIVO_PHONE_NUMBER?: string;
+  PLIVO_PUBLIC_BASE_URL?: string;
+  ASTERISK_ARI_BASE_URL?: string;
+  ASTERISK_ARI_USERNAME?: string;
+  ASTERISK_ARI_PASSWORD?: string;
+  ASTERISK_EXTERNAL_MEDIA_HOST?: string;
 }
 
-export function resolveProductionLike(
-  env?: { NODE_ENV?: string; DEPLOYMENT_MODE?: string },
-): boolean {
+function hasHostedBillingSignals(source: DeploymentModeEnv): boolean {
+  return Boolean(
+    source.BILLING_USAGE_INGEST_URL ||
+    source.BILLING_USAGE_INGEST_SECRET,
+  );
+}
+
+function hasLiveSpendSignals(source: DeploymentModeEnv): boolean {
+  return Boolean(
+    source.GEMINI_API_KEY ||
+    source.TWILIO_ACCOUNT_SID ||
+    source.TWILIO_AUTH_TOKEN ||
+    source.TWILIO_PHONE_NUMBER ||
+    source.TWILIO_PUBLIC_BASE_URL ||
+    source.PLIVO_AUTH_ID ||
+    source.PLIVO_AUTH_TOKEN ||
+    source.PLIVO_PHONE_NUMBER ||
+    source.PLIVO_PUBLIC_BASE_URL ||
+    source.ASTERISK_ARI_BASE_URL ||
+    source.ASTERISK_ARI_USERNAME ||
+    source.ASTERISK_ARI_PASSWORD ||
+    source.ASTERISK_EXTERNAL_MEDIA_HOST
+  );
+}
+
+export function resolveDeploymentMode(env?: DeploymentModeEnv): 'self_hosted' | 'hosted' {
   const source = env ?? process.env;
-  const mode = source.DEPLOYMENT_MODE === 'hosted' ? 'hosted' : 'self_hosted';
-  return source.NODE_ENV === 'production' || mode === 'hosted';
+  if (source.DEPLOYMENT_MODE === 'hosted') return 'hosted';
+
+  if (hasHostedBillingSignals(source)) {
+    return 'hosted';
+  }
+
+  const productionRuntime = source.NODE_ENV === 'production';
+  const explicitProductionSelfHosted = source.DEPLOYMENT_MODE === 'self_hosted' && source.ALLOW_PRODUCTION_SELF_HOSTED === 'true';
+  if (productionRuntime && !explicitProductionSelfHosted && (source.INBOUND_ORG_ROUTES || hasLiveSpendSignals(source))) {
+    return 'hosted';
+  }
+
+  if (source.DEPLOYMENT_MODE === 'self_hosted') return 'self_hosted';
+
+  return 'self_hosted';
+}
+
+export function resolveProductionLike(env?: DeploymentModeEnv): boolean {
+  const source = env ?? process.env;
+  return source.NODE_ENV === 'production' || resolveDeploymentMode(source) === 'hosted';
 }
 
 export function resolveRequireWebhookSignatures(

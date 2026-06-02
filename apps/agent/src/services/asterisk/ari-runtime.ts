@@ -4,11 +4,24 @@ import { AsteriskExternalMediaTransport } from './rtp';
 
 interface CallReadyPayload {
   direction: 'inbound' | 'outbound';
-  orgId?: string;
+  orgId: string;
   phone: string;
   providerCallId: string;
   routeKey?: string;
   transport: AsteriskExternalMediaTransport;
+}
+
+interface CallPreflightPayload {
+  direction: 'inbound' | 'outbound';
+  orgId?: string;
+  phone: string;
+  providerCallId: string;
+  routeKey?: string;
+}
+
+interface CallPreflightResult {
+  orgId: string;
+  releaseReservation?: () => void;
 }
 
 interface CallAudioFramePayload {
@@ -24,6 +37,7 @@ interface CallEndedPayload {
 interface AsteriskRuntimeHandlers {
   onAudioFrame: (payload: CallAudioFramePayload) => void;
   onCallEnded: (payload: CallEndedPayload) => Promise<void>;
+  onCallPreflight: (payload: CallPreflightPayload) => Promise<CallPreflightResult>;
   onCallReady: (payload: CallReadyPayload) => Promise<void>;
 }
 
@@ -252,6 +266,31 @@ export class AsteriskAriRuntime {
     const args = parseAppArgs(event.args);
     const direction = deriveDirection(channelId, args);
     const phone = derivePhone(event.channel, direction, args);
+    const routeKey = direction === 'inbound' ? deriveInboundRouteKey(args) : undefined;
+
+    let preflight: CallPreflightResult;
+    try {
+      preflight = await this.handlers.onCallPreflight({
+        providerCallId: channelId,
+        phone,
+        direction,
+        orgId: args.org_id || args.orgId,
+        routeKey,
+      });
+    } catch (error) {
+      this.lastError = error instanceof Error ? error.message : String(error);
+      console.warn(`[Asterisk ARI] Billing preflight rejected live bridge for ${channelId}:`, error);
+      await this.ariClient.hangupChannel(channelId).catch((hangupError) => {
+        console.error('[Asterisk ARI] Failed to hang up billing-rejected call:', hangupError);
+      });
+      return;
+    }
+
+    let releaseBillingReservation = preflight.releaseReservation;
+    const releaseReservation = () => {
+      releaseBillingReservation?.();
+      releaseBillingReservation = undefined;
+    };
 
     const transport = new AsteriskExternalMediaTransport({
       advertisedHost: config.asterisk.externalMediaHost,
@@ -331,11 +370,13 @@ export class AsteriskAriRuntime {
         providerCallId: channelId,
         phone,
         direction,
-        orgId: args.org_id || args.orgId,
-        routeKey: direction === 'inbound' ? deriveInboundRouteKey(args) : undefined,
+        orgId: preflight.orgId,
+        routeKey,
         transport,
       });
+      releaseReservation();
     } catch (error) {
+      releaseReservation();
       this.lastError = error instanceof Error ? error.message : String(error);
       console.error(`[Asterisk ARI] Failed to initialize live bridge for ${channelId}:`, error);
       await this.cleanupCall(channelId, 'Failed to initialize live bridge', { hangupPrimaryChannel: true });
