@@ -65,6 +65,6 @@
   "overrides": {
     "@hono/node-server": "^1.19.13",
     "protobufjs": "^7.6.0",
-    "qs": "^6.15.2"
+    "qs": "^6.16.0"
   }
 }
